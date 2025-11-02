@@ -266,3 +266,37 @@ Results should be documented here after running tests:
 - [ ] Test 6.1 -
 - [ ] Test 6.4 -
 - [ ] Test 6.5 -
+
+---
+
+## E2E Test Results
+
+### [2025-11-02] E2E: Autonomous Workflow Test
+**Issue**: #9
+**Agent**: tomdolen
+**Status**: IN PROGRESS
+**Test Type**: Assignment-based triggering with autonomous workflow
+
+**Setup**: Issue assigned to multiple users including tomdolen
+**Action**: Issue assignment triggered Claude Code workflow automatically
+**Expected**:
+- Workflow triggers on issue assignment
+- Agent (tomdolen) selected based on assignment
+- Progressive status updates in real-time
+- Agent autonomously determines appropriate actions
+- Creates PR with changes
+
+**Results**:
+- ✅ Workflow triggered successfully on issue assignment
+- ✅ Agent selection working (tomdolen selected from assigned users)
+- ✅ Progressive status updates functioning (comment updates in real-time)
+- ✅ Branch created: `claude/issue-9-20251102-2343`
+- 🔄 Autonomous decision-making in progress
+- ⏳ PR creation pending
+
+**Notes**:
+- This test validates the full autonomous workflow from issue assignment to PR creation
+- Tests PAT selection based on assignee (Test 1.3)
+- Tests progressive status updates (Test 5.1, 5.2)
+- Demonstrates end-to-end automation without explicit @claude mention
+- Agent successfully read repository context and test suite documentation
