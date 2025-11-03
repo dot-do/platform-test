@@ -253,6 +253,9 @@ Results should be documented here after running tests:
 [Date] Test X.X - [PASS/FAIL] - Notes
 ```
 
+### E2E Workflow Tests
+- [x] **E2E-001 (2025-11-03)**: Autonomous workflow with RPC - **PASSED** - Issue #14, validated complete chain: webhooks → state machine (RPC) → claude-code → PR creation. All components working correctly. See E2E_TEST_RESULTS.md for details.
+
 ### Phase 1 Results
 - [ ] Test 1.1 -
 - [ ] Test 2.1 -
