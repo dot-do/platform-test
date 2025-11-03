@@ -25,6 +25,16 @@ The repository includes minimal GitHub Actions workflows copied from the main pl
 
 See `TEST_SUITE.md` for comprehensive test scenarios and expected results.
 
+## Greeting Function
+
+Here's a simple greeting function that says 'Hello, World!':
+
+```javascript
+function greeting() {
+  return 'Hello, World!';
+}
+```
+
 ## Cleanup
 
 Test issues can be closed or deleted after validation. This repo is for testing only.
