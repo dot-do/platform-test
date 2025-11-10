@@ -152,6 +152,7 @@ jobs:
         uses: actions/checkout@v5
         with:
           repository: dot-do/platform
+          ref: fix/issue-8063-remove-unfiltered-pr-trigger  # TESTING: Use feature branch
           token: ${{ steps.select_pat.outputs.selected_pat }}
           fetch-depth: 0
           path: platform
