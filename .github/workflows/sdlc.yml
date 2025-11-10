@@ -290,33 +290,23 @@ jobs:
         run: |
           cd platform/packages/sdlc
 
-          # Create event payload
+          # Create GitHub event payload - TypeScript will parse it
           # NOTE: Repository context is platform-test (where the issue/PR lives)
-          cat > event.json <<'EOF'
-          {
-            "type": "${{ steps.event_context.outputs.xstate_event }}",
-            "issueNumber": ${{ steps.issue_pr_info.outputs.number }},
-            "repository": {
-              "owner": "${{ github.repository_owner }}",
-              "repo": "${{ github.event.repository.name }}",
-              "full_name": "${{ github.repository }}"
-            },
-            "assignee": "${{ steps.event_context.outputs.assignee }}",
-            "message": "${{ steps.event_context.outputs.message }}",
-            "user": "${{ steps.event_context.outputs.user }}",
-            "reviewState": "${{ steps.event_context.outputs.review_state }}",
-            "reviewBody": "${{ steps.event_context.outputs.review_body }}",
-            "hasXStateFlag": true
-          }
+          cat > github-event.json <<'EOF'
+          ${{ toJSON(github.event) }}
           EOF
 
-          echo "📝 Event Payload:"
-          cat event.json | jq .
+          # Add event_name and action to the payload
+          echo "$(jq '. + {event_name: "${{ github.event_name }}", action: "${{ github.event.action }}"}' github-event.json)" > github-event.json
 
-          # Run the SDLC engine CLI
+          echo "📝 GitHub Event:"
+          cat github-event.json | jq .
+
+          # Run the SDLC engine CLI with GitHub event
+          # TypeScript github-event-parser.ts will handle parsing
           # The SDLC will create branches/PRs in platform-test, not platform
           pnpm cli \
-            --event-file event.json \
+            --github-event github-event.json \
             --output state-snapshot.json \
             --verbose
 
