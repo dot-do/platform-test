@@ -1,0 +1,374 @@
+# Copy this file to: platform-test/.github/workflows/sdlc.yml
+#
+# This workflow runs the SDLC engine from the platform repo against the platform-test repo.
+# It checks out both repos and executes the SDLC package from platform.
+
+name: SDLC (XState)
+
+run-name: "SDLC - #${{ github.event.issue.number || github.event.pull_request.number || 'unknown' }}"
+
+on:
+  issues:
+    types: [opened, assigned]
+  issue_comment:
+    types: [created]
+  pull_request:
+    types: [opened, assigned, synchronize]
+  pull_request_review:
+    types: [submitted]
+  pull_request_review_comment:
+    types: [created]
+
+jobs:
+  sdlc:
+    # =========================================================================
+    # Trigger Strategy: Agent Assignment and Mentions
+    # =========================================================================
+    #
+    # This workflow triggers when:
+    # 1. Issues created with typescript-tom as assignee (PRIMARY TRIGGER)
+    # 2. Issues assigned to typescript-tom (existing issues)
+    # 3. Comments mentioning @typescript-tom or @quinn-qa
+    # 4. PRs assigned to typescript-tom or quinn-qa
+    # 5. PR reviews from quinn-qa
+    #
+    # This isolation ensures the XState SDLC runs independently from existing
+    # Claude Code workflows (@claude, @tomdolen, @priya-pdm, etc.)
+    #
+    # Trigger Conditions by Event Type:
+    # - issues.opened: Check if typescript-tom is in assignees list (gh issue create --assignee)
+    # - issues.assigned: Check if assigned to typescript-tom (gh issue edit --add-assignee)
+    # - issue_comment: Check for @typescript-tom or @quinn-qa mentions
+    # - pull_request: Check if assigned to typescript-tom or quinn-qa
+    # - pull_request_review: Check if reviewer is quinn-qa
+    # - pull_request_review_comment: Check for @typescript-tom or @quinn-qa mentions
+    # =========================================================================
+    if: |
+      (github.event_name == 'issues' && github.event.action == 'opened' &&
+       contains(github.event.issue.assignees.*.login, 'typescript-tom')) ||
+      (github.event_name == 'issues' && github.event.action == 'assigned' &&
+       github.event.assignee.login == 'typescript-tom') ||
+      (github.event_name == 'issue_comment' &&
+       github.event.comment.user.type != 'Bot' &&
+       (contains(github.event.comment.body, '@typescript-tom') ||
+        contains(github.event.comment.body, '@quinn-qa'))) ||
+      (github.event_name == 'pull_request' && github.event.action == 'opened') ||
+      (github.event_name == 'pull_request' && github.event.action == 'assigned' &&
+       (github.event.assignee.login == 'typescript-tom' ||
+        github.event.assignee.login == 'quinn-qa')) ||
+      (github.event_name == 'pull_request_review' &&
+       (github.event.review.user.login == 'quinn-qa' ||
+        contains(github.event.pull_request.assignees.*.login, 'typescript-tom'))) ||
+      (github.event_name == 'pull_request_review_comment' &&
+       github.event.comment.user.type != 'Bot' &&
+       (contains(github.event.comment.body, '@typescript-tom') ||
+        contains(github.event.comment.body, '@quinn-qa')))
+
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+
+    concurrency:
+      group: sdlc-${{ github.event.issue.number || github.event.pull_request.number }}
+      cancel-in-progress: false  # Queue for sequential processing
+
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+      id-token: write
+      actions: read
+
+    steps:
+      - name: Get issue/PR info
+        id: issue_pr_info
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Get issue or PR number from various event types
+          if [ "${{ github.event_name }}" = "issues" ]; then
+            NUMBER="${{ github.event.issue.number }}"
+            IS_PR="false"
+          elif [ "${{ github.event_name }}" = "issue_comment" ]; then
+            NUMBER="${{ github.event.issue.number }}"
+            if [ -n "${{ github.event.issue.pull_request }}" ]; then
+              IS_PR="true"
+            else
+              IS_PR="false"
+            fi
+          else
+            NUMBER="${{ github.event.pull_request.number }}"
+            IS_PR="true"
+          fi
+
+          echo "number=$NUMBER" >> $GITHUB_OUTPUT
+          echo "is_pr=$IS_PR" >> $GITHUB_OUTPUT
+
+          echo "📋 Issue/PR Number: $NUMBER"
+          echo "📋 Is PR: $IS_PR"
+
+      - name: Select PAT for workflow
+        id: select_pat
+        env:
+          GH_PAT: ${{ secrets.GH_PAT }}
+          TYPESCRIPT_TOM_GH_PAT: ${{ secrets.TYPESCRIPT_TOM_GH_PAT || secrets.TOM_GH_PAT }}
+          QUINN_GH_PAT: ${{ secrets.QUINN_GH_PAT }}
+        run: |
+          # CRITICAL SECURITY: Mask all PATs IMMEDIATELY
+          [ -n "$GH_PAT" ] && echo "::add-mask::${GH_PAT}"
+          [ -n "$TYPESCRIPT_TOM_GH_PAT" ] && echo "::add-mask::${TYPESCRIPT_TOM_GH_PAT}"
+          [ -n "$QUINN_GH_PAT" ] && echo "::add-mask::${QUINN_GH_PAT}"
+
+          # For SDLC workflow, default to typescript-tom (implementation)
+          # The XState machine will handle PAT selection internally
+          SELECTED_PAT="$TYPESCRIPT_TOM_GH_PAT"
+          SELECTED_USERNAME="typescript-tom"
+
+          if [ -z "$SELECTED_PAT" ]; then
+            echo "⚠️ TYPESCRIPT_TOM_GH_PAT not available, falling back to GH_PAT"
+            SELECTED_PAT="$GH_PAT"
+            SELECTED_USERNAME="nathanclevenger"
+          fi
+
+          if [ -z "$SELECTED_PAT" ]; then
+            echo "❌ No GitHub PATs available"
+            exit 1
+          fi
+
+          echo "selected_pat=${SELECTED_PAT}" >> $GITHUB_OUTPUT
+          echo "selected_username=${SELECTED_USERNAME}" >> $GITHUB_OUTPUT
+          echo "✅ Selected PAT for ${SELECTED_USERNAME}"
+
+      # =========================================================================
+      # DUAL CHECKOUT: platform-test (target) + platform (SDLC package)
+      # =========================================================================
+
+      - name: Checkout platform-test repository (target)
+        uses: actions/checkout@v5
+        with:
+          token: ${{ steps.select_pat.outputs.selected_pat }}
+          fetch-depth: 0
+          path: platform-test
+
+      - name: Checkout platform repository (for SDLC package)
+        uses: actions/checkout@v5
+        with:
+          repository: dot-do/platform
+          token: ${{ steps.select_pat.outputs.selected_pat }}
+          fetch-depth: 0
+          path: platform
+
+      - name: Configure Git
+        run: |
+          git config --global user.name "SDLC Bot"
+          git config --global user.email "sdlc-bot[bot]@users.noreply.github.com"
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          run_install: false
+
+      - name: Get pnpm store directory
+        shell: bash
+        run: |
+          echo "STORE_PATH=$(pnpm store path --silent)" >> $GITHUB_ENV
+
+      - name: Setup pnpm cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.STORE_PATH }}
+          # Use platform's lockfile for cache key (SDLC package lives there)
+          key: ${{ runner.os }}-pnpm-store-${{ hashFiles('platform/pnpm-lock.yaml') }}
+          restore-keys: |
+            ${{ runner.os }}-pnpm-store-
+
+      - name: Install dependencies (platform repo)
+        run: |
+          cd platform
+          pnpm install --frozen-lockfile
+
+      - name: Build SDLC package
+        run: |
+          cd platform/packages/sdlc
+          pnpm typecheck
+
+      - name: Determine event type and context
+        id: event_context
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          EVENT_NAME="${{ github.event_name }}"
+          NUMBER="${{ steps.issue_pr_info.outputs.number }}"
+
+          echo "🎯 Event: $EVENT_NAME"
+          echo "🎯 Action: ${{ github.event.action }}"
+          echo "🎯 Number: $NUMBER"
+
+          # Map GitHub webhook event to XState event type
+          case "$EVENT_NAME" in
+            issues)
+              if [ "${{ github.event.action }}" = "opened" ]; then
+                # Issue created with assignee (PRIMARY TRIGGER)
+                XSTATE_EVENT="ISSUE_CREATED"
+                ASSIGNEE="typescript-tom"  # We know it's typescript-tom from the if condition
+                echo "assignee=$ASSIGNEE" >> $GITHUB_OUTPUT
+                echo "🎯 Issue created with assignee: $ASSIGNEE"
+              elif [ "${{ github.event.action }}" = "assigned" ]; then
+                # Issue assigned after creation
+                XSTATE_EVENT="ISSUE_ASSIGNED"
+                ASSIGNEE="${{ github.event.assignee.login }}"
+                echo "assignee=$ASSIGNEE" >> $GITHUB_OUTPUT
+                echo "🎯 Issue assigned to: $ASSIGNEE"
+              fi
+              ;;
+            issue_comment)
+              # Check if @typescript-tom mentioned
+              if echo "${{ github.event.comment.body }}" | grep -q "@typescript-tom"; then
+                XSTATE_EVENT="ISSUE_MENTIONED"
+              else
+                XSTATE_EVENT="USER_MESSAGE"
+              fi
+              MESSAGE="${{ github.event.comment.body }}"
+              USER="${{ github.event.comment.user.login }}"
+              echo "message=$MESSAGE" >> $GITHUB_OUTPUT
+              echo "user=$USER" >> $GITHUB_OUTPUT
+              ;;
+            pull_request)
+              if [ "${{ github.event.action }}" = "opened" ]; then
+                XSTATE_EVENT="PR_CREATED"
+              elif [ "${{ github.event.action }}" = "synchronize" ]; then
+                XSTATE_EVENT="PR_UPDATED"
+              fi
+              ;;
+            pull_request_review)
+              XSTATE_EVENT="REVIEW_SUBMITTED"
+              REVIEW_STATE="${{ github.event.review.state }}"
+              REVIEW_BODY="${{ github.event.review.body }}"
+              echo "review_state=$REVIEW_STATE" >> $GITHUB_OUTPUT
+              echo "review_body=$REVIEW_BODY" >> $GITHUB_OUTPUT
+              ;;
+          esac
+
+          echo "xstate_event=$XSTATE_EVENT" >> $GITHUB_OUTPUT
+          echo "✅ XState Event: $XSTATE_EVENT"
+
+      - name: Request review from quinn-qa (if PR opened)
+        if: github.event_name == 'pull_request' && github.event.action == 'opened'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          PR_NUMBER="${{ steps.issue_pr_info.outputs.number }}"
+          echo "📝 Requesting review from quinn-qa for PR #$PR_NUMBER"
+
+          # Check if quinn-qa is already a reviewer
+          CURRENT_REVIEWERS=$(gh pr view $PR_NUMBER --json reviewRequests --jq '.reviewRequests[].login' || echo "")
+
+          if echo "$CURRENT_REVIEWERS" | grep -q "quinn-qa"; then
+            echo "✅ quinn-qa is already a reviewer"
+          else
+            echo "➕ Adding quinn-qa as reviewer"
+            gh pr edit $PR_NUMBER --add-reviewer quinn-qa || echo "⚠️  Could not add reviewer (user may not have permission)"
+          fi
+
+      - name: Run XState SDLC Engine
+        id: sdlc_engine
+        timeout-minutes: 30
+        env:
+          GITHUB_TOKEN: ${{ steps.select_pat.outputs.selected_pat }}
+          TYPESCRIPT_TOM_GH_PAT: ${{ secrets.TYPESCRIPT_TOM_GH_PAT || secrets.TOM_GH_PAT }}
+          QUINN_GH_PAT: ${{ secrets.QUINN_GH_PAT }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          AWS_BEARER_TOKEN_BEDROCK: ${{ secrets.AWS_BEARER_TOKEN_BEDROCK }}
+          ENABLE_XSTATE_SDLC: "true"
+          SDLC_ALLOW_PLACEHOLDERS: "false"  # Require real implementations
+          # IMPORTANT: Repository context points to platform-test, NOT platform
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: |
+          cd platform/packages/sdlc
+
+          # Create event payload
+          # NOTE: Repository context is platform-test (where the issue/PR lives)
+          cat > event.json <<'EOF'
+          {
+            "type": "${{ steps.event_context.outputs.xstate_event }}",
+            "issueNumber": ${{ steps.issue_pr_info.outputs.number }},
+            "repository": {
+              "owner": "${{ github.repository_owner }}",
+              "repo": "${{ github.event.repository.name }}",
+              "full_name": "${{ github.repository }}"
+            },
+            "assignee": "${{ steps.event_context.outputs.assignee }}",
+            "message": "${{ steps.event_context.outputs.message }}",
+            "user": "${{ steps.event_context.outputs.user }}",
+            "reviewState": "${{ steps.event_context.outputs.review_state }}",
+            "reviewBody": "${{ steps.event_context.outputs.review_body }}",
+            "hasXStateFlag": true
+          }
+          EOF
+
+          echo "📝 Event Payload:"
+          cat event.json | jq .
+
+          # Run the SDLC engine CLI
+          # The SDLC will create branches/PRs in platform-test, not platform
+          pnpm cli \
+            --event-file event.json \
+            --output state-snapshot.json \
+            --verbose
+
+      - name: Handle completion
+        if: success()
+        env:
+          GH_TOKEN: ${{ steps.select_pat.outputs.selected_pat }}
+        run: |
+          echo "✅ SDLC workflow completed successfully"
+
+          # Read state snapshot if available
+          if [ -f platform/packages/sdlc/state-snapshot.json ]; then
+            echo "📊 Final State:"
+            cat platform/packages/sdlc/state-snapshot.json | jq .
+          fi
+
+      - name: Handle failure
+        if: failure()
+        env:
+          GH_TOKEN: ${{ steps.select_pat.outputs.selected_pat }}
+        run: |
+          echo "❌ SDLC workflow failed"
+
+          NUMBER="${{ steps.issue_pr_info.outputs.number }}"
+
+          # Add xstate-failed label
+          gh issue edit "$NUMBER" \
+            --add-label "xstate-failed" \
+            --remove-label "xstate-doing" \
+            --remove-label "xstate-reviewing" \
+            2>/dev/null || true
+
+          # Post failure comment
+          # NOTE: Do NOT mention @typescript-tom here to avoid triggering recursive workflow runs
+          gh issue comment "$NUMBER" \
+            --body "❌ **XState SDLC Workflow Failed**
+
+          The autonomous SDLC workflow encountered an error and could not complete.
+
+          **Workflow run**: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+
+          Please review the logs and retry by mentioning typescript-tom or manually." \
+            2>/dev/null || true
+
+      - name: Handle cancellation
+        if: cancelled()
+        env:
+          GH_TOKEN: ${{ steps.select_pat.outputs.selected_pat }}
+        run: |
+          echo "🔄 SDLC workflow cancelled (concurrent run detected)"
+
+          NUMBER="${{ steps.issue_pr_info.outputs.number }}"
+
+          gh issue edit "$NUMBER" \
+            --remove-label "xstate-doing" \
+            2>/dev/null || true
