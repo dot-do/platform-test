@@ -4,5 +4,5 @@
  * @returns The absolute value of n
  */
 export function abs(n: number): number {
-  return n < 0 ? -n : n;
+  return Math.abs(n);
 }
